@@ -11,10 +11,10 @@
 				<Option object_output="obj/Debug/" />
 				<Option type="1" />
 				<Option compiler="gcc" />
-				<Option parameters="i=~/Work/phi/bin/Debug/t2.csv o=~/Work/phi/bin/Debug/out. csv " />
+				<Option parameters="i=~/Work/phi/bin/Debug/i2.csv o=~/Work/phi/bin/Debug/o2. csv  autonc" />
 				<Compiler>
 					<Add option="-g" />
-					<Add directory="../epp/" />
+					<Add directory="epp/" />
 					<Add directory="/usr/local/boost_1_57_0/" />
 				</Compiler>
 			</Target>
