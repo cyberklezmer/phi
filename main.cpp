@@ -37,7 +37,6 @@ public:
 
 class zdistribution : public distribution<int>
 {
-double p;
     int l;
     vector <double> v;
     void setzeros()
@@ -335,11 +334,13 @@ class mftrans
     /// set by \p transform
     double scale;
     vector<vector<double>> ws;
-    vector<zdistribution> W;
+    vector<zdistribution> logW;
 
-    std::ofstream dlog;
-    vector<double> dfronts;
+    std::ofstream* wlog;
+    vector<double> logwbins;
 
+    std::ofstream* zlog;
+    vector<double> logzbins;
 
     double getnorm()
     {
@@ -389,11 +390,11 @@ class mftrans
         return yraw + yrawcor(s,t, scale);
     }
 
-    void setq(vector<double>& qs,vector<zdistribution>& D,
+    void setq(vector<double>& qs,vector<zdistribution>& Z,
                 int firstnz, unsigned t, int yraw, double scale)
     {
         for(unsigned j=firstnz; j<=t; j++)
-            qs[j] = D[j].cdf(-ystarraw(yraw,j,t,scale));
+            qs[j] = Z[j].cdf(-ystarraw(yraw,j,t,scale));
     }
 
 
@@ -439,16 +440,18 @@ class mftrans
              : b(s) * v(s) * (1-pow(v(s),m-t)) / (1.0 - v(s));
     }
 
-    double rhot(double t)
+    double rhot(int s, int t)
     {
-        return rho * sqrt((1.0-pow(psi,t+1)) / (1.0-psi));
+        if(psi==1)
+            return (t+1-s)*rho;
+        else
+            return rho * sqrt((1.0-pow(psi,t+1-s)) / (1.0-psi));
     }
 
-    double f(int t, double x)
+    double f(int t, double x, double rhot)
     {
-        double rt = rhot(t);
-        double res = normalcdf(-x / rt)
-           - exp( x+rt*rt / 2.0) * normalcdf( (-x-rt*rt)/rt );
+        double res = normalcdf(-x / rhot)
+           - exp( x+rhot*rhot / 2.0) * normalcdf( (-x-rhot*rhot)/rhot );
 
         if(res > 1)
             throw std::logic_error("f > 1");
@@ -458,7 +461,7 @@ class mftrans
 
     double ItoG(const vector<double>& w, const vector<double>& qs,
                 int firstnz, unsigned t,
-                double i)
+                double aI)
     {
         double rnum=0;
         double rden=0;
@@ -467,7 +470,8 @@ class mftrans
             double h = ht(j,t);
             assert(h > 0);
             double istart = j==0 ? 0.0 : I[j-1];
-            rnum += w[j]*qs[j]*f(t,i-istart-log(h));
+            double rt = rhot(j,t);
+            rnum += w[j]*qs[j]*f(t,aI-istart-log(h),rt);
             rden += w[j];
         }
         return rnum / rden;
@@ -482,7 +486,7 @@ public:
         scale = minnormsdistscale(dprec) / std::min(sigma1,sigma) ;
 
         vector<int> yraw(T);
-        vector<zdistribution> D(T);
+        vector<zdistribution> Z(T);
 
         if(aw==FtoR)
             for(unsigned int t=0; t<T; t++)
@@ -495,19 +499,32 @@ public:
         vector<double> w = zero_vector(T);
         vector<double> qs = zero_vector(T);
 
-        dlog << "Fronts" << dfronts << std::endl;
+        if(wlog)
+        {
+            *wlog << "-inf_";
+            for(unsigned int i=0; i<logwbins.size(); i++)
+                *wlog << logwbins[i] << "," << logwbins[i] << "_";
+            *wlog << "inf" << std::endl;
+        }
+        if(zlog)
+        {
+            *zlog << "-inf_";
+            for(unsigned int i=0; i<logzbins.size(); i++)
+                *zlog << logzbins[i] << "," << logzbins[i] << "_";
+            *zlog << "inf" << std::endl;
+        }
 
         for(unsigned int t=0;;t++)
         {
             if(nc[t]>0)
             {
-                discretizenormal(D[t],sigma1*scale,dprec); // initial
+                discretizenormal(Z[t],sigma1*scale,dprec); // initial
                 errs[t] = dprec;
             }
             else
             {
-                D[t].set(0,0);
-                D[t].setpdf(0,1);
+                Z[t].set(0,0);
+                Z[t].setpdf(0,1);
                 errs[t] = 0;
             }
             w[t] = nc[t];
@@ -544,8 +561,9 @@ public:
                 if(nc[1] == 1.0 && ws > 0)
                     throw std::logic_error(
                      "Portfolio not empty while newcomers rate =1");
+/*                std::cout << "w[" << firstnz << "..." << t << "]: ";
                 for(unsigned int j=firstnz; j<t; j++)
-                    w[j] *= (1.0-nc[t])/(1.0-q);
+                    w[j] *= (1.0-nc[t])/(1.0-q);*/
             }
 
             if(aw==RtoF)
@@ -569,10 +587,10 @@ public:
                         {
                             int cor = yrawcor(j,t,scale);
                             cors[j] = cor;
-                            int maxcandidate = -D[j].least()-cor;
+                            int maxcandidate = -Z[j].least()-cor;
                             if(maxcandidate > maxyraw)
                                 maxyraw = maxcandidate;
-                            int mincandidate = -D[j].greatest()-cor;
+                            int mincandidate = -Z[j].greatest()-cor;
                             if(mincandidate < minyraw)
                                 minyraw = mincandidate;
                             deltat += w[j] * errs[j];
@@ -590,7 +608,7 @@ public:
                     {
                         for(unsigned int j=firstnz; j<=t; j++)
                             if(w[j])
-                                pi += w[j]*D[j].pdf(-(y+cors[j]));
+                                pi += w[j]*Z[j].pdf(-(y+cors[j]));
                         if(pi>=Q[t]-deltat)
                             if(!uset)
                             {
@@ -628,7 +646,7 @@ public:
                         I[t] = -HUGE_VAL;
                     else
                     {
-                        setq(qs,D,firstnz,t,yraw[t],scale);
+                        setq(qs,Z,firstnz,t,yraw[t],scale);
 //                        L("w=" << w)
 //                        L("q=" << qs)
                         double i = I[t];
@@ -652,7 +670,7 @@ public:
                                 hi= i+oldd;
                                 break;
                             }
-                            if(fabs(d) > rho * 100)
+                            if(fabs(d) > rho * 10000)
                                 throw std::logic_error("Cannot find bound of interval whin inverting G");
                             oldd=d;
                             d *= 2.0;
@@ -668,8 +686,17 @@ public:
                             if((hi-lo) < dprec)
                                 break;
                         }
-                        I[t] = (hi+lo) / 2.0;
-                    }
+                       I[t] = (hi+lo) / 2.0;
+/*
+double h = ht(firstnz,t);
+double istart = firstnz==0 ? 0.0 : I[firstnz-1];
+double rt = rhot(firstnz,t);
+
+std::cout << std::endl << "rhot=" << rt <<
+   " ht=" << h << " dI=" << I[t]-istart <<
+   " q=" << Q[t] <<
+   " f=" << f(t,I[t]-istart-log(h),rt) << std::endl;
+*/                    }
                     std::cout << ", I[" << t << "]=" << I[t];
                 }
                 std::cout << std::endl;
@@ -681,14 +708,14 @@ public:
                 for(unsigned int j=firstnz; j<=t; j++)
                     if(w[j])
                     {
-                        Q[t] += w[j]*D[j].cdf(-ystarraw(yraw[t],j,t,scale));
+                        Q[t] += w[j]*Z[j].cdf(-ystarraw(yraw[t],j,t,scale));
                         Qerr[t] += w[j]*errs[j];
                     }
                 std::cout << "Q[" << t << "]=" << Q[t];
 
                 if(aIs)
                 {
-                    setq(qs,D,firstnz,t,yraw[t],scale);
+                    setq(qs,Z,firstnz,t,yraw[t],scale);
 
                     G[t] = ItoG(w,qs,firstnz,t, I[t]);
                     std::cout << ", G[" << t << "]=" << G[t];
@@ -703,8 +730,8 @@ public:
             for(unsigned int j=firstnz; j<=t; j++)
                 if(w[j])
                 {
-                    int l = D[j].least();
-                    int h = D[j].greatest();
+                    int l = Z[j].least();
+                    int h = Z[j].greatest();
                     if(l < cl)
                         cl = l;
                     if(h > ch)
@@ -712,36 +739,59 @@ public:
                 }
             int yshift = yraw[t] - (ystarinput ? yrawcor(0,t,scale) : 0);
 
-            W[t].set(cl+yshift,ch+yshift,true);
+            logW[t].set(cl+yshift,ch+yshift,true);
             for(int k=cl; k<=ch; k++)
             {
                 double p = 0;
                 for(unsigned j=firstnz; j<=t; j++)
-                    p += w[j]*D[j].pdf(k);
-                W[t].setpdf(k+yshift,p);
+                    p += w[j]*Z[j].pdf(k);
+                logW[t].setpdf(k+yshift,p);
             }
-            dlog << "D[0]" << D[0].histogram(dfronts,scale) << std::endl;
-            dlog << "W[t]" << W[t].histogram(dfronts,scale) << std::endl;
+            if(wlog)
+            {
+                vector<double> h = logW[t].histogram(logwbins,scale);
+                for(unsigned i=0; ; i++)
+                {
+                    *wlog << h[i];
+                    if(i==h.size()-1)
+                        break;
+                    *wlog << ",";
+                }
+                *wlog << std::endl;
+            }
+            if(zlog && firstnz <= 0)
+            {
+                vector<double> h = Z[0].histogram(logzbins,scale);
+                for(unsigned i=0; ; i++)
+                {
+                    *zlog << h[i];
+                    if(i==h.size()-1)
+                        break;
+                    *zlog << ",";
+                }
+                *zlog << std::endl;
+            }
+
             ws[t] = w;
 
-            // perform the transformations of D's
+            // perform the transformations of Z's
             for(unsigned int j=firstnz; j<=t; j++)
                 if(w[j])
                 {
                     int truncat = -ystarraw(yraw[t],j,t,scale);
-                    D[j].truncate(truncat);
-                    errs[j] = 2 * errs[j] / (1-D[j].cdf(truncat));
+                    Z[j].truncate(truncat);
+                    errs[j] = 2 * errs[j] / (1-Z[j].cdf(truncat));
 
                     double scaleerr;
-                    D[j].scale(phi,&scaleerr);
+                    Z[j].scale(phi,&scaleerr);
 
                     errs[j] += scaleerr;
 
-                    D[j] += u;
+                    Z[j] += u;
 
                     errs[j] += dprec;
-/*std::cout << "range(D[" << j << "])/2="
-                  << D[j].greatest() - D[j].least()
+/*std::cout << "range(Z[" << j << "])/2="
+                  << Z[j].greatest() - Z[j].least()
                   << " w[j]=" << w[j]
                   << std::endl;*/
                 }
@@ -751,7 +801,7 @@ public:
             for(unsigned int j=firstnz; j<=t; j++)
                 if(w[j])
                 {
-                    D[j].approx(dprec);
+                    Z[j].approx(dprec);
                     errs[j] += dprec;
                 }
         }
@@ -854,8 +904,8 @@ public:
         Qerr(T), Yerr(T),
         ystarinput(false),
         sigma(1), sigma1(1), phi(0), rho(1), psi(0),
-        dprec(0.0001), scale(NAN), ws(T), W(T),
-        dlog("dlog.csv"), dfronts(51)
+        dprec(0.0001), scale(NAN), ws(T), logW(T),
+        wlog(0), logwbins(51), zlog(0), logzbins(51)
     {
         if(T == 0)
             throw std::runtime_error("Zero T.");
@@ -878,9 +928,12 @@ public:
         singleupsilon = true;
 
         double h = 0.1;
-        double dfh = (double) dfronts.size() / 2.0 * h;
-        for(unsigned z=0; z<dfronts.size(); z++)
-            dfronts[z] = -dfh + z*h;
+        double dfh = (double) logwbins.size() / 2.0 * h;
+        for(unsigned z=0; z<logwbins.size(); z++)
+            logwbins[z] = -dfh + z*h;
+        double dfhz = (double) logzbins.size() / 2.0 * h;
+        for(unsigned z=0; z<logzbins.size(); z++)
+            logzbins[z] = -dfhz + z*h;
     }
     void setsigma(double asigma)
     {
@@ -1088,16 +1141,17 @@ public:
 
     const zdistribution& getlogW(unsigned int t)
     {
-        return W[t];
+        return logW[t];
     }
+
     double getlogWmean(unsigned t)
     {
-        return W[t].mean() / scale;
+        return logW[t].mean() / scale;
     }
 
     double getlogWsigma(unsigned t)
     {
-        return sqrt(W[t].var()) / scale;
+        return sqrt(logW[t].var()) / scale;
     }
 
     void setfluentnc()
@@ -1121,6 +1175,17 @@ public:
         dprec = aprec;
     }
 
+    void setlwl(std::ofstream* alwl)
+    {
+        wlog = alwl;
+    }
+
+    void setlzl(std::ofstream* alzl)
+    {
+        zlog = alzl;
+    }
+
+
     double getprec()
     {
         return dprec;
@@ -1139,9 +1204,11 @@ public:
 "inv       - inverse transformation is computed" << endl <<\
 "singleg   - only single portfolio" << endl <<\
 "autonc    - set newcomers ratest to 1,1/2,1/3,...,1/m,1/m" << endl <<\
-"precf=VAL - increase precision by VAL"  << endl <<\
+"precf=VAL - increases precision by VAL"  << endl <<\
+"lwlog=FN  - logs histograms of log wealth to file FN"  << endl <<\
+"lzlog=FN  - logs histograms of log Z of the first generation to file FN"  << endl <<\
 "invc      - checks the computation by backward inversion"  << endl <<\
-"simc=N    - checks the computation by simulation of size N"  << endl <<\
+"simc=SIMN - checks the computation by simulation of size N"  << endl <<\
 endl << "Input file columnts:" << endl <<\
 "Y     - factor Y (mandatory without `inv', used as guess values with `inv')" << endl <<\
 "I     - factor I (used as guess values with `inv')"  << endl <<\
@@ -1159,8 +1226,8 @@ endl << "Output file columnts:" << endl <<\
 "N     - newcomers rates" << endl <<\
 "M,S   - mean and stdev of wealth distribution" << endl <<\
 endl << \
-"YI,II,QI,GI - results of inversion check"<< endl <<\
-"QS,GS,Qe,Ge - results and stdevs of simulation"<< endl
+"YI,II,QI,GI   - results of inversion check"<< endl <<\
+"QS,GS,QSe,GSe - results and stdevs of simulation (stdevs only if SIMN>5)"<< endl
 
 
 #define E(X) { stringstream s; s << "Error: " << X << endl; throw logic_error(s.str()); }
@@ -1176,6 +1243,8 @@ int main(int argc, char ** argv)
 
         string input;
         string output;
+        string lwlog;
+        string lzlog;
         bool inversion = false;
         bool simcheck = false;
         int simn = 0;
@@ -1234,6 +1303,10 @@ int main(int argc, char ** argv)
                 s >> psi;
             else if(a == "precf")
                 s >> precfactor;
+            else if(a == "lwlog")
+                s >> lwlog;
+            else if(a == "lzlog")
+                s >> lzlog;
             else
                 E("Unknown argument " << a)
         }
@@ -1250,7 +1323,15 @@ int main(int argc, char ** argv)
 
         ofstream out(output);
         if(!inp)
-            E("Cannot open onput "<< output)
+            E("Cannot open output "<< output)
+
+        ofstream lwl(lwlog);
+        if(lwlog != "" && !lwl)
+            E("Cannot open logw log  "<< lwlog)
+
+        ofstream lzl(lzlog);
+        if(lzlog != "" && !lzl)
+            E("Cannot open logz log  "<< lzlog)
 
         csvrow ih;
         inp >> ih;
@@ -1271,7 +1352,10 @@ int main(int argc, char ** argv)
             else if(lab == "Y")
                 Yi = i;
             else if(lab == "Ystar")
+            {
                 Ystari = i;
+                ystarinput = true;
+            }
             else if(lab == "G")
                 Gi = i;
             else if(lab == "Q")
@@ -1321,10 +1405,7 @@ int main(int argc, char ** argv)
                 else if(i == Yi)
                     Y.push_back(v);
                 else if(i == Ystari)
-                {
                     Y.push_back(v);
-                    ystarinput = true;
-                }
                 else if(i == Qi)
                     Q.push_back(v);
                 else if(i == Gi)
@@ -1338,11 +1419,10 @@ int main(int argc, char ** argv)
 
             }
         }
-
         bool twodim = true;
         if(!inversion)
         {
-            if(Yi < 0)
+            if(Yi < 0 && !ystarinput)
                 E("Y not found")
             if(Ii < 0)
                 twodim = false;
@@ -1360,7 +1440,7 @@ int main(int argc, char ** argv)
 
         mftrans tr(T,m);
 
-        if(Yi >= 0)
+        if(Yi >= 0 || (ystarinput && Ystari >=0))
             tr.setY(Y);
         if(Ii >= 0)
             tr.setI(I);
@@ -1387,7 +1467,7 @@ int main(int argc, char ** argv)
         if(singleg)
             ncways++; // default for tr.
         if(ncways == 0)
-            E("Not clear abou newcommers. Set either autonc, singleg or provice columnt N")
+            E("Not clear abou newcommers. Set either autonc, singleg or provide columnt N in the input file")
         else if(ncways > 1)
             E("Amgiguous input of newcomers");
 
@@ -1431,6 +1511,11 @@ int main(int argc, char ** argv)
                 E("precfactor cannot be zero.")
             tr.setprec(tr.getprec()/precfactor);
         }
+        if(lwl)
+            tr.setlwl(&lwl);
+        if(lzl)
+            tr.setlzl(&lzl);
+
         cout << "Processing" << endl;
     /*    cout << "Y=" << tr.getY() << endl;
         cout << "I=" << tr.getI() << endl;
@@ -1560,9 +1645,15 @@ int main(int argc, char ** argv)
             out << "GI" << ",";
         if(simcheck)
         {
-            out << "QS,QSe,";
+            out << "QS,";
+            if(simn>5)
+                out << "QSe,";
             if(twodim)
-                out << "GS,GSe,";
+            {
+                out << "GS,";
+                if(simn>5)
+                    out << "GSe,";
+            }
         }
 
         out << "M,S" << endl;
@@ -1593,9 +1684,15 @@ int main(int argc, char ** argv)
                 out << GI[i] << ",";
             if(simcheck)
             {
-                out << QS[i] << "," << QSe[i] << ",";
+                out << QS[i] << ",";
+                if(simn>5)
+                    out << QSe[i] << ",";
                 if(twodim)
-                    out << GS[i] << "," << GSe[i] << ",";
+                {
+                    out << GS[i] << ",";
+                    if(simn>5)
+                        out << GSe[i] << ",";
+                }
             }
             out << tr.getlogWmean(i) << ",";
             out << tr.getlogWsigma(i) << endl;
