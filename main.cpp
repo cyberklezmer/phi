@@ -1347,6 +1347,7 @@ int main(int argc, char ** argv)
         for(unsigned i=0; i<ih.size(); i++)
         {
             string lab = ih[i];
+
             if(lab == "I")
                 Ii = i;
             else if(lab == "Y")
