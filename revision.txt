@@ -1,0 +1,4 @@
+v 1.01 (25.9.2015)
+- parameter ``conscheck'' added
+- error in computattion of weights fixed
+
