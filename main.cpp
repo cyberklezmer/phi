@@ -1,4 +1,5 @@
 #include <boost/math/distributions/normal.hpp>
+#include <boost/math/distributions/normal.hpp>
 #include <boost/math/distributions.hpp>
 #include <assert.h>
 #include <ctype.h>
@@ -342,6 +343,8 @@ class mftrans
     std::ofstream* zlog;
     vector<double> logzbins;
 
+    bool conscheck;
+
     double getnorm()
     {
         static std::mt19937 gen;
@@ -561,9 +564,9 @@ public:
                 if(nc[1] == 1.0 && ws > 0)
                     throw std::logic_error(
                      "Portfolio not empty while newcomers rate =1");
-/*                std::cout << "w[" << firstnz << "..." << t << "]: ";
+/*                std::cout << "w[" << firstnz << "..." << t << "]: ";*/
                 for(unsigned int j=firstnz; j<t; j++)
-                    w[j] *= (1.0-nc[t])/(1.0-q);*/
+                    w[j] *= (1.0-nc[t])/(1.0-q);
             }
 
             if(aw==RtoF)
@@ -670,8 +673,12 @@ public:
                                 hi= i+oldd;
                                 break;
                             }
-                            if(fabs(d) > rho * 10000)
+                            if(fabs(d) > rho * 100000)
+                            {
+                                std::cout << "Error inverting G=" << G[t] << std::endl;
+
                                 throw std::logic_error("Cannot find bound of interval whin inverting G");
+                            }
                             oldd=d;
                             d *= 2.0;
                         }
@@ -718,7 +725,7 @@ std::cout << std::endl << "rhot=" << rt <<
                     setq(qs,Z,firstnz,t,yraw[t],scale);
 
                     G[t] = ItoG(w,qs,firstnz,t, I[t]);
-                    std::cout << ", G[" << t << "]=" << G[t];
+                    std::cout << ", G[" << t << "]=" << G[t] << std::endl;
                 }
 
                 std::cout << std::endl;
@@ -727,29 +734,68 @@ std::cout << std::endl << "rhot=" << rt <<
             // now set the output : C and w
             int cl = INT_MAX;
             int ch = -INT_MAX;
+
+            double sumw = 0;
+
             for(unsigned int j=firstnz; j<=t; j++)
                 if(w[j])
                 {
+                    sumw += w[j];
                     int l = Z[j].least();
                     int h = Z[j].greatest();
+                    if(conscheck)
+                    {
+                        double p = Z[j].cdf(h);
+                        if(fabs(p-1) > 0.00001)
+                            std::cout << j << "-th distribution sums to " << p << std::endl;
+                    }
                     if(l < cl)
                         cl = l;
                     if(h > ch)
                         ch = h;
                 }
+
+            if(conscheck)
+            {
+                if(fabs(sumw-1) >= 0.0001)
+                   std::cout << "Total weight sums to " << sumw << std::endl;
+            }
+
             int yshift = yraw[t] - (ystarinput ? yrawcor(0,t,scale) : 0);
 
             logW[t].set(cl+yshift,ch+yshift,true);
+
+            double totalp = 0;
             for(int k=cl; k<=ch; k++)
             {
                 double p = 0;
                 for(unsigned j=firstnz; j<=t; j++)
                     p += w[j]*Z[j].pdf(k);
                 logW[t].setpdf(k+yshift,p);
+                totalp += p;
+            }
+            if(conscheck)
+            {
+                if(fabs(totalp-1) >= 0.0001)
+                   std::cout << "Total wealth distribution sums to " << totalp << std::endl;
             }
             if(wlog)
             {
                 vector<double> h = logW[t].histogram(logwbins,scale);
+
+                if(conscheck)
+                {
+                    double p=0;
+                    for(unsigned i=0; i<h.size(); i++)
+                    {
+                       if(h[i] < 0)
+                            std::cout << "Negative " << i+1 << "th bar of wealth histogram." << std::endl;
+                       p+=h[i];
+                    }
+                    if(fabs(p-1) >= 0.0001)
+                        std::cout << "Wealth histogram sums to " << p << std::endl;
+                }
+
                 for(unsigned i=0; ; i++)
                 {
                     *wlog << h[i];
@@ -905,7 +951,7 @@ std::cout << std::endl << "rhot=" << rt <<
         ystarinput(false),
         sigma(1), sigma1(1), phi(0), rho(1), psi(0),
         dprec(0.0001), scale(NAN), ws(T), logW(T),
-        wlog(0), logwbins(51), zlog(0), logzbins(51)
+        wlog(0), logwbins(51), zlog(0),  logzbins(51), conscheck(false)
     {
         if(T == 0)
             throw std::runtime_error("Zero T.");
@@ -1185,6 +1231,10 @@ std::cout << std::endl << "rhot=" << rt <<
         zlog = alzl;
     }
 
+    void setconscheck(bool acc)
+    {
+        conscheck = acc;
+    }
 
     double getprec()
     {
@@ -1194,7 +1244,7 @@ std::cout << std::endl << "rhot=" << rt <<
 
 };
 
-#define khelp "phi - ver 1.0" << endl << endl << \
+#define khelp "phi - ver 1.01" << endl << endl << \
 "Program arguments:" << endl <<\
 "i=INPUT   - input csv file (mandatory)" << endl <<\
 "o=OUPTUT  - output csv file (mandatory)"<< endl <<\
@@ -1207,6 +1257,7 @@ std::cout << std::endl << "rhot=" << rt <<
 "precf=VAL - increases precision by VAL"  << endl <<\
 "lwlog=FN  - logs histograms of log wealth to file FN"  << endl <<\
 "lzlog=FN  - logs histograms of log Z of the first generation to file FN"  << endl <<\
+"conscheck - performs consistency checks whenever possible"  << endl <<\
 "invc      - checks the computation by backward inversion"  << endl <<\
 "simc=SIMN - checks the computation by simulation of size N"  << endl <<\
 endl << "Input file columnts:" << endl <<\
@@ -1235,6 +1286,20 @@ endl << \
 
 int main(int argc, char ** argv)
 {
+/*    zdistribution X;
+    double V[] = { 0.05, 0.10, 0.15, 0.10, 0.2, 0.10, 0.15, 0.10, 0.05 };
+
+    epp::vector<double> VV(9);
+    for(int ii=0; ii<9; ii++)
+        VV[ii]=V[ii];
+    X.set(-4,VV);
+    std::cout << X << std::endl;
+
+    X.scale(0.25);
+    std::cout << X << std::endl;
+
+    return 0;
+*/
     using namespace std;
     if(argc==2 && argv[1][0] == '?')
         cout<<khelp << endl;
@@ -1252,6 +1317,7 @@ int main(int argc, char ** argv)
         bool ystarinput = false;
         bool autonc = false;
         bool singleg = false;
+        bool ccheck = false;
         unsigned m=0;
         double sigma = NAN;
         double sigma1 = NAN;
@@ -1307,6 +1373,8 @@ int main(int argc, char ** argv)
                 s >> lwlog;
             else if(a == "lzlog")
                 s >> lzlog;
+            else if(a == "conscheck")
+                ccheck = true;
             else
                 E("Unknown argument " << a)
         }
@@ -1347,6 +1415,7 @@ int main(int argc, char ** argv)
         for(unsigned i=0; i<ih.size(); i++)
         {
             string lab = ih[i];
+
             if(lab == "I")
                 Ii = i;
             else if(lab == "Y")
@@ -1464,6 +1533,8 @@ int main(int argc, char ** argv)
             tr.setnc(N);
             ncways++;
         }
+        if(ccheck)
+            tr.setconscheck(true);
         if(singleg)
             ncways++; // default for tr.
         if(ncways == 0)
@@ -1701,7 +1772,7 @@ int main(int argc, char ** argv)
     }
     catch (std::exception& e)
     {
-        std::cout << "There was an error: " <<  std::endl
+        std::cout << std::endl << "There was an error: " <<  std::endl
            << e.what() << std::endl;
         std::cout << "For help, use ? as argument." << endl;
         return 1;
@@ -1709,5 +1780,3 @@ int main(int argc, char ** argv)
     return 0;
 }
 
-// todo
-// - zprovoznit errors
