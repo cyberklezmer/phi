@@ -841,7 +841,7 @@ std::cout << std::endl << "rhot=" << rt <<
                 for(int k=0; k<kg; k++)
                 {
                     double& wlth = Z[j][k];
-                    if(!isnan(wlth))
+                    if(!std::isnan(wlth))
                     {
                         if(aG)
                         {
@@ -874,7 +874,7 @@ std::cout << std::endl << "rhot=" << rt <<
                 for(int k=0; k<kg; k++)
                 {
                     double&  wlth = Z[j][k];
-                    if(!isnan(wlth))
+                    if(!std::isnan(wlth))
                     {
                         if(wlth + Y[t]+(ystarinput ? 0 :  ystarcor(j,t)) < 0)
                         {
